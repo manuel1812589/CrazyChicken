@@ -86,6 +86,9 @@ def entrenar_detector_ventas(df: pd.DataFrame) -> dict:
     dict con métricas del entrenamiento.
     """
     features = ["ventas_mes", "ticket_promedio", "cantidad_ventas"]
+    features = [f for f in features if f in df.columns]
+    if not features:
+        return {"error": "No hay columnas válidas para entrenar."}
     df_clean = df[features].dropna()
 
     if len(df_clean) < 6:
@@ -115,8 +118,14 @@ def detectar_anomalias_ventas(df: pd.DataFrame) -> pd.DataFrame:
         - score_anomalia (float 0-1)
         - razon_anomalia (str)
     """
-    features = ["ventas_mes", "ticket_promedio", "cantidad_ventas"]
     df_out = df.copy()
+    features = ["ventas_mes", "ticket_promedio", "cantidad_ventas"]
+    features = [f for f in features if f in df_out.columns]
+    if not features:
+        df_out["es_anomalia"] = False
+        df_out["score_anomalia"] = 0.0
+        df_out["razon_anomalia"] = ""
+        return df_out
 
     pipeline = _load_model(MODEL_ANOMALY_VENTAS)
     if pipeline is None:
@@ -135,29 +144,34 @@ def detectar_anomalias_ventas(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _explicar_anomalia_ventas(row: pd.Series, df: pd.DataFrame) -> str:
-    """Genera una explicación legible de por qué el mes es anómalo."""
     if not row["es_anomalia"]:
         return ""
 
     razones = []
-    media_ventas = df["ventas_mes"].mean()
-    std_ventas = df["ventas_mes"].std()
-    media_ticket = df["ticket_promedio"].mean()
-    std_ticket = df["ticket_promedio"].std()
-    media_cant = df["cantidad_ventas"].mean()
-    std_cant = df["cantidad_ventas"].std()
 
-    if abs(row["ventas_mes"] - media_ventas) > 1.5 * std_ventas:
-        direccion = "alta" if row["ventas_mes"] > media_ventas else "baja"
-        razones.append(f"venta mensual inusualmente {direccion}")
+    if "ventas_mes" in df.columns:
+        media_ventas = df["ventas_mes"].mean()
+        std_ventas = df["ventas_mes"].std()
+        if std_ventas > 0 and abs(row["ventas_mes"] - media_ventas) > 1.5 * std_ventas:
+            direccion = "alta" if row["ventas_mes"] > media_ventas else "baja"
+            razones.append(f"venta mensual inusualmente {direccion}")
 
-    if abs(row["ticket_promedio"] - media_ticket) > 1.5 * std_ticket:
-        direccion = "alto" if row["ticket_promedio"] > media_ticket else "bajo"
-        razones.append(f"ticket promedio inusualmente {direccion}")
+    if "ticket_promedio" in df.columns:
+        media_ticket = df["ticket_promedio"].mean()
+        std_ticket = df["ticket_promedio"].std()
+        if (
+            std_ticket > 0
+            and abs(row["ticket_promedio"] - media_ticket) > 1.5 * std_ticket
+        ):
+            direccion = "alto" if row["ticket_promedio"] > media_ticket else "bajo"
+            razones.append(f"ticket promedio inusualmente {direccion}")
 
-    if abs(row["cantidad_ventas"] - media_cant) > 1.5 * std_cant:
-        direccion = "alta" if row["cantidad_ventas"] > media_cant else "baja"
-        razones.append(f"cantidad de ventas inusualmente {direccion}")
+    if "cantidad_ventas" in df.columns:
+        media_cant = df["cantidad_ventas"].mean()
+        std_cant = df["cantidad_ventas"].std()
+        if std_cant > 0 and abs(row["cantidad_ventas"] - media_cant) > 1.5 * std_cant:
+            direccion = "alta" if row["cantidad_ventas"] > media_cant else "baja"
+            razones.append(f"cantidad de ventas inusualmente {direccion}")
 
     return "; ".join(razones) if razones else "combinación inusual de indicadores"
 
@@ -382,10 +396,14 @@ def generar_recomendaciones_ml(
 
     cumplimiento_meta = (df_ventas["ventas_mes"] >= meta_mensual).mean() * 100
     ticket_promedio = (
-        df_ventas["ticket_promedio"].mean() if "ticket_promedio" in df_ventas else 0
+        df_ventas["ticket_promedio"].mean()
+        if "ticket_promedio" in df_ventas.columns
+        else 0
     )
     cantidad_promedio = (
-        df_ventas["cantidad_ventas"].mean() if "cantidad_ventas" in df_ventas else 0
+        df_ventas["cantidad_ventas"].mean()
+        if "cantidad_ventas" in df_ventas.columns
+        else 0
     )
 
     recomendaciones = _reglas_recomendacion(
@@ -608,3 +626,504 @@ def resumen_ml_dashboard(df_ventas: pd.DataFrame, meta_mensual: float) -> dict:
         resumen["alerta"] = "Sin alertas críticas. Monitoreo normal."
 
     return resumen
+
+
+def generar_contexto_ml_ticket(df: pd.DataFrame, meta_ticket: float) -> str:
+    """
+    Pipeline ML para el chat de Ticket Promedio.
+    Columnas esperadas: ticket_promedio, ventas_totales, cantidad_ventas, nombre_mes
+    """
+    lineas = ["=== ANÁLISIS ML – TICKET PROMEDIO ===\n"]
+
+    cols_anom = [
+        c
+        for c in ["ticket_promedio", "ventas_totales", "cantidad_ventas"]
+        if c in df.columns
+    ]
+    if cols_anom and len(df) >= 6:
+        pipeline = _load_model(MODEL_ANOMALY_TICKET)
+        if pipeline is None:
+            p = _build_anomaly_pipeline(0.1)
+            p.fit(df[cols_anom].fillna(df[cols_anom].median()).values)
+            _save_model(p, MODEL_ANOMALY_TICKET)
+            pipeline = p
+        X = df[cols_anom].fillna(df[cols_anom].median()).values
+        flags = _flag_anomalies(pipeline, X)
+        scores = _anomaly_score(pipeline, X)
+        df_tmp = df.copy()
+        df_tmp["_flag"] = flags
+        df_tmp["_score"] = scores
+        anomalos = df_tmp[df_tmp["_flag"]]
+        if not anomalos.empty:
+            lineas.append("ANOMALÍAS DETECTADAS (ticket):")
+            for _, r in anomalos.iterrows():
+                lineas.append(
+                    f"  • {r.get('nombre_mes','?')}: ticket ${r.get('ticket_promedio',0):,.2f} | score {r['_score']:.2f}"
+                )
+        else:
+            lineas.append("ANOMALÍAS: Ningún mes con ticket atípico.")
+    else:
+        lineas.append("ANOMALÍAS: Datos insuficientes para detección.")
+
+    lineas.append("")
+
+    if "ticket_promedio" in df.columns and len(df) >= 4:
+        df_c = df[["ticket_promedio"]].dropna().reset_index(drop=True)
+        X_h = np.arange(1, len(df_c) + 1).reshape(-1, 1)
+        y_h = df_c["ticket_promedio"].values
+        from sklearn.linear_model import LinearRegression
+
+        m = LinearRegression().fit(X_h, y_h)
+        std_e = np.std(y_h - m.predict(X_h))
+        pendiente = m.coef_[0]
+        lineas.append(
+            f"PROYECCIÓN TICKET ({'creciente' if pendiente > 0 else 'decreciente'}, {pendiente:+.2f}/mes):"
+        )
+        for i in range(1, 4):
+            pred = m.predict([[len(df_c) + i]])[0]
+            lineas.append(
+                f"  • Mes +{i}: ${pred:,.2f}  (rango: ${pred - 1.28*std_e:,.2f} – ${pred + 1.28*std_e:,.2f})"
+            )
+        lineas.append("")
+
+    if "ticket_promedio" in df.columns:
+        rec3 = df["ticket_promedio"].iloc[-3:].mean()
+        ant = df["ticket_promedio"].iloc[:-3].mean() if len(df) > 3 else rec3
+        tend_pct = ((rec3 - ant) / ant * 100) if ant != 0 else 0
+        cumpl = (df["ticket_promedio"] >= meta_ticket).mean() * 100
+        lineas.append(f"TENDENCIA RECIENTE: {tend_pct:+.1f}% (últimos 3 vs anteriores)")
+        lineas.append(f"CUMPLIMIENTO META ${meta_ticket}: {cumpl:.0f}% de los meses")
+
+    return "\n".join(lineas)
+
+
+def generar_contexto_ml_cantidad(df: pd.DataFrame, meta_cantidad: float) -> str:
+    """
+    Pipeline ML para el chat de Cantidad de Ventas.
+    Columnas esperadas: cantidad_ventas, cantidad_acumulada, nombre_mes
+    """
+    lineas = ["=== ANÁLISIS ML – CANTIDAD DE VENTAS ===\n"]
+
+    # — Anomalías —
+    cols_anom = [
+        c for c in ["cantidad_ventas", "cantidad_acumulada"] if c in df.columns
+    ]
+    if cols_anom and len(df) >= 6:
+        pipeline = _load_model(MODEL_ANOMALY_CANTIDAD)
+        if pipeline is None:
+            p = _build_anomaly_pipeline(0.1)
+            p.fit(df[cols_anom].fillna(df[cols_anom].median()).values)
+            _save_model(p, MODEL_ANOMALY_CANTIDAD)
+            pipeline = p
+        X = df[cols_anom].fillna(df[cols_anom].median()).values
+        flags = _flag_anomalies(pipeline, X)
+        scores = _anomaly_score(pipeline, X)
+        df_tmp = df.copy()
+        df_tmp["_flag"] = flags
+        df_tmp["_score"] = scores
+        anomalos = df_tmp[df_tmp["_flag"]]
+        if not anomalos.empty:
+            lineas.append("ANOMALÍAS DETECTADAS (cantidad):")
+            for _, r in anomalos.iterrows():
+                lineas.append(
+                    f"  • {r.get('nombre_mes','?')}: {r.get('cantidad_ventas',0):,.0f} ventas | score {r['_score']:.2f}"
+                )
+        else:
+            lineas.append("ANOMALÍAS: Ningún mes con volumen atípico.")
+    else:
+        lineas.append("ANOMALÍAS: Datos insuficientes.")
+
+    lineas.append("")
+
+    if "cantidad_ventas" in df.columns and len(df) >= 4:
+        df_c = df[["cantidad_ventas"]].dropna().reset_index(drop=True)
+        X_h = np.arange(1, len(df_c) + 1).reshape(-1, 1)
+        y_h = df_c["cantidad_ventas"].values
+        from sklearn.linear_model import LinearRegression
+
+        m = LinearRegression().fit(X_h, y_h)
+        std_e = np.std(y_h - m.predict(X_h))
+        pendiente = m.coef_[0]
+        lineas.append(
+            f"PROYECCIÓN CANTIDAD ({'creciente' if pendiente > 0 else 'decreciente'}, {pendiente:+.0f}/mes):"
+        )
+        for i in range(1, 4):
+            pred = m.predict([[len(df_c) + i]])[0]
+            lineas.append(
+                f"  • Mes +{i}: {pred:,.0f} ventas  (rango: {pred - 1.28*std_e:,.0f} – {pred + 1.28*std_e:,.0f})"
+            )
+        lineas.append("")
+
+    if "cantidad_ventas" in df.columns:
+        rec3 = df["cantidad_ventas"].iloc[-3:].mean()
+        ant = df["cantidad_ventas"].iloc[:-3].mean() if len(df) > 3 else rec3
+        tend_pct = ((rec3 - ant) / ant * 100) if ant != 0 else 0
+        cumpl = (df["cantidad_ventas"] >= meta_cantidad).mean() * 100
+        lineas.append(f"TENDENCIA RECIENTE: {tend_pct:+.1f}%")
+        lineas.append(
+            f"CUMPLIMIENTO META {meta_cantidad:,.0f} ventas: {cumpl:.0f}% de los meses"
+        )
+
+    return "\n".join(lineas)
+
+
+def generar_contexto_ml_crecimiento(df: pd.DataFrame, meta_crecimiento: float) -> str:
+    """
+    Pipeline ML para el chat de Crecimiento de Ventas.
+    Columnas esperadas: crecimiento_ventas, ventas_mes, nombre_mes, cumple_meta
+    """
+    lineas = ["=== ANÁLISIS ML – CRECIMIENTO DE VENTAS ===\n"]
+
+    if "crecimiento_ventas" in df.columns and len(df) >= 6:
+        X = df[["crecimiento_ventas"]].fillna(0).values
+        pipeline = (
+            _load_model(_MODEL_PATHS.get("crecimiento", ""))
+            if hasattr(df, "_dummy")
+            else None
+        )
+        import os
+
+        crecimiento_path = os.path.join(MODELS_DIR, "anomaly_crecimiento.pkl")
+        pipeline = _load_model(crecimiento_path)
+        if pipeline is None:
+            pipeline = _build_anomaly_pipeline(0.1)
+            pipeline.fit(X)
+            _save_model(pipeline, crecimiento_path)
+        flags = _flag_anomalies(pipeline, X)
+        scores = _anomaly_score(pipeline, X)
+        df_tmp = df.copy()
+        df_tmp["_flag"] = flags
+        df_tmp["_score"] = scores
+        anomalos = df_tmp[df_tmp["_flag"]]
+        if not anomalos.empty:
+            lineas.append("ANOMALÍAS DETECTADAS (crecimiento):")
+            for _, r in anomalos.iterrows():
+                crec_pct = r.get("crecimiento_ventas", 0) * 100
+                lineas.append(
+                    f"  • {r.get('nombre_mes','?')}: {crec_pct:+.1f}% | score {r['_score']:.2f}"
+                )
+        else:
+            lineas.append(
+                "ANOMALÍAS: Ningún mes con crecimiento estadísticamente atípico."
+            )
+    else:
+        lineas.append("ANOMALÍAS: Datos insuficientes.")
+
+    lineas.append("")
+
+    if "ventas_mes" in df.columns and len(df) >= 4:
+        df_c = df[["ventas_mes"]].dropna().reset_index(drop=True)
+        X_h = np.arange(1, len(df_c) + 1).reshape(-1, 1)
+        y_h = df_c["ventas_mes"].values
+        from sklearn.linear_model import LinearRegression
+
+        m = LinearRegression().fit(X_h, y_h)
+        std_e = np.std(y_h - m.predict(X_h))
+        pendiente = m.coef_[0]
+        lineas.append(
+            f"PROYECCIÓN VENTAS ({'creciente' if pendiente > 0 else 'decreciente'}, {pendiente:+.0f}/mes):"
+        )
+        for i in range(1, 4):
+            pred = m.predict([[len(df_c) + i]])[0]
+            lineas.append(
+                f"  • Mes +{i}: ${pred:,.0f}  (rango: ${pred - 1.28*std_e:,.0f} – ${pred + 1.28*std_e:,.0f})"
+            )
+        lineas.append("")
+
+    if "crecimiento_ventas" in df.columns:
+        prom = df["crecimiento_ventas"].mean() * 100
+        cumpl = (df["crecimiento_ventas"] >= meta_crecimiento).mean() * 100
+        tend = (
+            "mejorando"
+            if df["crecimiento_ventas"].iloc[-3:].mean()
+            > df["crecimiento_ventas"].iloc[:3].mean()
+            else "deteriorándose"
+        )
+        lineas.append(f"CRECIMIENTO PROMEDIO: {prom:+.2f}%")
+        lineas.append(
+            f"CUMPLIMIENTO META {meta_crecimiento*100:.0f}%: {cumpl:.0f}% de los meses"
+        )
+        lineas.append(f"TENDENCIA GENERAL: {tend}")
+
+    return "\n".join(lineas)
+
+
+def generar_contexto_ml_vendedores(df: pd.DataFrame, meta_vendedor: float) -> str:
+    """
+    Pipeline ML para el chat de Ventas por Vendedor.
+    Columnas esperadas: vendedor, ventas_totales, clientes_atendidos, productos_vendidos
+    """
+    lineas = ["=== ANÁLISIS ML – VENTAS POR VENDEDOR ===\n"]
+
+    cols_group = [
+        c
+        for c in ["ventas_totales", "clientes_atendidos", "productos_vendidos"]
+        if c in df.columns
+    ]
+    if "vendedor" in df.columns and cols_group and len(df["vendedor"].unique()) >= 4:
+        df_vend = df.groupby("vendedor", as_index=False)[cols_group].sum()
+        import os
+
+        vendedores_path = os.path.join(MODELS_DIR, "anomaly_vendedores.pkl")
+        X = df_vend[cols_group].fillna(0).values
+        pipeline = _load_model(vendedores_path)
+        if pipeline is None:
+            pipeline = _build_anomaly_pipeline(0.15)
+            pipeline.fit(X)
+            _save_model(pipeline, vendedores_path)
+        flags = _flag_anomalies(pipeline, X)
+        scores = _anomaly_score(pipeline, X)
+        df_vend["_flag"] = flags
+        df_vend["_score"] = scores
+        anomalos = df_vend[df_vend["_flag"]]
+        if not anomalos.empty:
+            lineas.append("VENDEDORES CON DESEMPEÑO ATÍPICO (IsolationForest):")
+            media_v = df_vend["ventas_totales"].mean()
+            for _, r in anomalos.iterrows():
+                dir_str = (
+                    "por encima" if r["ventas_totales"] > media_v else "por debajo"
+                )
+                lineas.append(
+                    f"  • {r['vendedor']}: ${r['ventas_totales']:,.0f} — {dir_str} del promedio | score {r['_score']:.2f}"
+                )
+        else:
+            lineas.append(
+                "ANOMALÍAS: Ningún vendedor con desempeño estadísticamente atípico."
+            )
+    else:
+        lineas.append(
+            "ANOMALÍAS: Se necesitan al menos 4 vendedores para detección ML."
+        )
+
+    lineas.append("")
+
+    if "ventas_totales" in df.columns and "vendedor" in df.columns:
+        n_vend = df["vendedor"].nunique()
+        total = df["ventas_totales"].sum()
+        prom_vend = total / n_vend if n_vend > 0 else 0
+        cumpl = (
+            df.groupby("vendedor")["ventas_totales"].sum() >= meta_vendedor
+        ).mean() * 100
+        mejor = df.groupby("vendedor")["ventas_totales"].sum().idxmax()
+        lineas.append(f"PROMEDIO POR VENDEDOR: ${prom_vend:,.0f}")
+        lineas.append(
+            f"CUMPLIMIENTO META ${meta_vendedor:,.0f}: {cumpl:.0f}% de vendedores"
+        )
+        lineas.append(f"VENDEDOR LÍDER: {mejor}")
+        if "ventas_promedio_por_vendedor" in df.columns:
+            df_m = df.groupby("nombre_mes", as_index=False)[
+                "ventas_promedio_por_vendedor"
+            ].first()
+            if len(df_m) >= 4:
+                df_c = (
+                    df_m[["ventas_promedio_por_vendedor"]]
+                    .dropna()
+                    .reset_index(drop=True)
+                )
+                X_h = np.arange(1, len(df_c) + 1).reshape(-1, 1)
+                y_h = df_c["ventas_promedio_por_vendedor"].values
+                from sklearn.linear_model import LinearRegression
+
+                m = LinearRegression().fit(X_h, y_h)
+                pendiente = m.coef_[0]
+                std_e = np.std(y_h - m.predict(X_h))
+                pred1 = m.predict([[len(df_c) + 1]])[0]
+                lineas.append("")
+                lineas.append(f"PROYECCIÓN PROMEDIO POR VENDEDOR:")
+                lineas.append(
+                    f"  • Mes +1: ${pred1:,.0f}  (rango: ${pred1 - 1.28*std_e:,.0f} – ${pred1 + 1.28*std_e:,.0f})"
+                )
+                lineas.append(
+                    f"  Tendencia: {'creciente' if pendiente > 0 else 'decreciente'} ({pendiente:+.0f}/mes)"
+                )
+
+    return "\n".join(lineas)
+
+
+def generar_contexto_ml_productos(df: pd.DataFrame, meta_productos: float) -> str:
+    """
+    Pipeline ML para el chat de Productos Vendidos por Tipo.
+    Columnas esperadas: tipo_plato, cantidad_vendida, ventas_totales, cantidad_ventas
+    """
+    lineas = ["=== ANÁLISIS ML – PRODUCTOS VENDIDOS ===\n"]
+
+    cols_group = [c for c in ["cantidad_vendida", "ventas_totales"] if c in df.columns]
+    if "tipo_plato" in df.columns and cols_group:
+        df_tipo = df.groupby("tipo_plato", as_index=False)[cols_group].sum()
+        if len(df_tipo) >= 4:
+            import os
+
+            productos_path = os.path.join(MODELS_DIR, "anomaly_productos.pkl")
+            X = df_tipo[cols_group].fillna(0).values
+            pipeline = _load_model(productos_path)
+            if pipeline is None:
+                pipeline = _build_anomaly_pipeline(0.15)
+                pipeline.fit(X)
+                _save_model(pipeline, productos_path)
+            flags = _flag_anomalies(pipeline, X)
+            scores = _anomaly_score(pipeline, X)
+            df_tipo["_flag"] = flags
+            df_tipo["_score"] = scores
+            anomalos = df_tipo[df_tipo["_flag"]]
+            if not anomalos.empty:
+                lineas.append("TIPOS DE PLATO CON PARTICIPACIÓN ATÍPICA:")
+                media_t = df_tipo["cantidad_vendida"].mean()
+                for _, r in anomalos.iterrows():
+                    dir_str = (
+                        "excepcionalmente alto"
+                        if r["cantidad_vendida"] > media_t
+                        else "excepcionalmente bajo"
+                    )
+                    lineas.append(
+                        f"  • {r['tipo_plato']}: {r['cantidad_vendida']:,.0f} uds — {dir_str} | score {r['_score']:.2f}"
+                    )
+            else:
+                lineas.append(
+                    "ANOMALÍAS: Todos los tipos tienen participación estadísticamente normal."
+                )
+        else:
+            lineas.append("ANOMALÍAS: Se necesitan al menos 4 tipos de plato.")
+    else:
+        lineas.append("ANOMALÍAS: Datos insuficientes.")
+
+    lineas.append("")
+
+    if (
+        "cantidad_vendida" in df.columns
+        and "mes" in df.columns
+        and len(df["mes"].unique()) >= 4
+    ):
+        df_m = (
+            df.groupby("mes", as_index=False)["cantidad_vendida"]
+            .sum()
+            .sort_values("mes")
+        )
+        df_c = df_m[["cantidad_vendida"]].dropna().reset_index(drop=True)
+        X_h = np.arange(1, len(df_c) + 1).reshape(-1, 1)
+        y_h = df_c["cantidad_vendida"].values
+        from sklearn.linear_model import LinearRegression
+
+        m = LinearRegression().fit(X_h, y_h)
+        std_e = np.std(y_h - m.predict(X_h))
+        pendiente = m.coef_[0]
+        lineas.append(
+            f"PROYECCIÓN PRODUCTOS TOTALES ({'creciente' if pendiente > 0 else 'decreciente'}):"
+        )
+        for i in range(1, 4):
+            pred = m.predict([[len(df_c) + i]])[0]
+            lineas.append(
+                f"  • Mes +{i}: {pred:,.0f} uds  (rango: {pred - 1.28*std_e:,.0f} – {pred + 1.28*std_e:,.0f})"
+            )
+        lineas.append("")
+
+    if "tipo_plato" in df.columns and "cantidad_vendida" in df.columns:
+        df_dist = df.groupby("tipo_plato")["cantidad_vendida"].sum()
+        total = df_dist.sum()
+        meses = df["mes"].nunique() if "mes" in df.columns else 1
+        cumpl = (
+            (df.groupby("mes")["cantidad_vendida"].sum() >= meta_productos).mean() * 100
+            if "mes" in df.columns
+            else 0
+        )
+        lineas.append(f"TOTAL PRODUCTOS: {total:,.0f}")
+        lineas.append(
+            f"CUMPLIMIENTO META {meta_productos:,.0f}: {cumpl:.0f}% de los meses"
+        )
+        lineas.append("DISTRIBUCIÓN POR TIPO:")
+        for tipo, cant in df_dist.sort_values(ascending=False).items():
+            lineas.append(f"  • {tipo}: {cant:,.0f} ({cant/total*100:.1f}%)")
+
+    return "\n".join(lineas)
+
+
+def generar_contexto_ml_participacion(
+    df: pd.DataFrame, meta_participacion: float
+) -> str:
+    """
+    Pipeline ML para el chat de Participación de Productos.
+    Columnas esperadas: producto, participacion_porcentual, unidades_vendidas,
+                        ventas_totales, categoria, cumple_meta
+    """
+    lineas = ["=== ANÁLISIS ML – PARTICIPACIÓN DE PRODUCTOS ===\n"]
+
+    cols_anom = [
+        c for c in ["participacion_porcentual", "unidades_vendidas"] if c in df.columns
+    ]
+    if cols_anom and len(df) >= 6:
+        import os
+
+        productos_path = os.path.join(MODELS_DIR, "anomaly_productos.pkl")
+        X = df[cols_anom].fillna(0).values
+        pipeline = _load_model(productos_path)
+        if pipeline is None:
+            pipeline = _build_anomaly_pipeline(0.1)
+            pipeline.fit(X)
+            _save_model(pipeline, productos_path)
+        flags = _flag_anomalies(pipeline, X)
+        scores = _anomaly_score(pipeline, X)
+        df_tmp = df.copy()
+        df_tmp["_flag"] = flags
+        df_tmp["_score"] = scores
+        anomalos = df_tmp[df_tmp["_flag"]]
+        if not anomalos.empty:
+            lineas.append("PRODUCTOS CON PARTICIPACIÓN ATÍPICA (IsolationForest):")
+            media_p = df["participacion_porcentual"].mean()
+            for _, r in anomalos.iterrows():
+                dir_str = "alta" if r["participacion_porcentual"] > media_p else "baja"
+                lineas.append(
+                    f"  • {r.get('producto','?')}: {r['participacion_porcentual']:.2f}% — participación {dir_str} | score {r['_score']:.2f}"
+                )
+        else:
+            lineas.append(
+                "ANOMALÍAS: Ningún producto con participación estadísticamente atípica."
+            )
+    else:
+        lineas.append("ANOMALÍAS: Datos insuficientes para detección.")
+
+    lineas.append("")
+
+    if "participacion_porcentual" in df.columns:
+        total_prods = len(df)
+        sobre_meta = (df["participacion_porcentual"] >= meta_participacion * 100).sum()
+        top3 = df.nlargest(3, "participacion_porcentual")[
+            "participacion_porcentual"
+        ].sum()
+        top5 = df.nlargest(5, "participacion_porcentual")[
+            "participacion_porcentual"
+        ].sum()
+        diversif = "Alta" if top3 < 50 else "Media" if top3 < 70 else "Baja"
+        lider = (
+            df.loc[df["participacion_porcentual"].idxmax(), "producto"]
+            if "producto" in df.columns
+            else "N/A"
+        )
+        debil = (
+            df.loc[df["participacion_porcentual"].idxmin(), "producto"]
+            if "producto" in df.columns
+            else "N/A"
+        )
+
+        lineas.append(
+            f"PRODUCTOS SOBRE META ({meta_participacion*100:.0f}%): {sobre_meta} de {total_prods}"
+        )
+        lineas.append(f"CONCENTRACIÓN TOP 3: {top3:.1f}%  |  TOP 5: {top5:.1f}%")
+        lineas.append(f"NIVEL DE DIVERSIFICACIÓN: {diversif}")
+        lineas.append(
+            f"PRODUCTO LÍDER: {lider} ({df['participacion_porcentual'].max():.2f}%)"
+        )
+        lineas.append(
+            f"PRODUCTO MÁS DÉBIL: {debil} ({df['participacion_porcentual'].min():.2f}%)"
+        )
+
+    if "categoria" in df.columns and "participacion_porcentual" in df.columns:
+        lineas.append("")
+        lineas.append("PARTICIPACIÓN POR CATEGORÍA:")
+        df_cat = (
+            df.groupby("categoria")["participacion_porcentual"]
+            .sum()
+            .sort_values(ascending=False)
+        )
+        for cat, part in df_cat.items():
+            lineas.append(f"  • {cat}: {part:.1f}%")
+
+    return "\n".join(lineas)

@@ -9,6 +9,7 @@ from app.services.ai_service import (
     generar_analisis_ticket_promedio,
     generar_respuesta_chat,
 )
+from app.services.ml_service import generar_contexto_ml_ticket
 import time
 
 dash.register_page(__name__, path="/kpi-ticket-promedio")
@@ -553,21 +554,8 @@ def generate_ai_response(is_thinking, history, mes_filtro):
     if df.empty:
         ai_response = "No hay datos disponibles para responder tu pregunta."
     else:
-        # Crear contexto específico para ticket promedio
-        contexto = f"""
-        DATOS DE TICKET PROMEDIO:
-        
-        Ticket promedio general: ${df["ticket_promedio"].mean():,.2f}
-        Mejor mes (mayor ticket): {df.loc[df["ticket_promedio"].idxmax()]["nombre_mes"]} (${df["ticket_promedio"].max():,.2f})
-        Peor mes (menor ticket): {df.loc[df["ticket_promedio"].idxmin()]["nombre_mes"]} (${df["ticket_promedio"].min():,.2f})
-        Cantidad de ventas totales: {df["cantidad_ventas"].sum():,.0f}
-        Ventas totales: ${df["ventas_totales"].sum():,.0f}
-        Meta de ticket: $70.00
-        Meses que superan la meta: {(df["ticket_promedio"] >= 70).sum()}
-        Meses por debajo de la meta: {(df["ticket_promedio"] < 70).sum()}
-        Desviación estándar: ${df["ticket_promedio"].std():,.2f}
-        """
-
+        meta_ticket = 70
+        contexto = generar_contexto_ml_ticket(df, meta_ticket)
         ai_response = generar_respuesta_chat(contexto, last_user_msg)
 
     for i in range(len(history) - 1, -1, -1):

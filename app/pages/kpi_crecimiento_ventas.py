@@ -10,6 +10,7 @@ from app.services.ai_service import (
     generar_analisis_crecimiento_ventas,
     generar_respuesta_chat,
 )
+from app.services.ml_service import generar_contexto_ml_crecimiento
 import time
 
 dash.register_page(__name__, path="/kpi-crecimiento-ventas")
@@ -714,20 +715,8 @@ def generate_ai_response(is_thinking, history, mes_filtro):
     if df_filtered.empty:
         ai_response = "No hay datos disponibles para responder tu pregunta."
     else:
-        contexto = f"""
-        DATOS DE CRECIMIENTO DE VENTAS:
-        
-        Crecimiento promedio: {df_filtered['crecimiento_ventas'].mean()*100:.2f}%
-        Meta de crecimiento: 2% mensual
-        Meses que superaron la meta: {df_filtered['cumple_meta'].sum()} de {len(df_filtered)}
-        Mejor mes de crecimiento: {df_filtered.loc[df_filtered['crecimiento_ventas'].idxmax()]['nombre_mes']} ({df_filtered['crecimiento_ventas'].max()*100:.2f}%)
-        Peor mes de crecimiento: {df_filtered.loc[df_filtered['crecimiento_ventas'].idxmin()]['nombre_mes']} ({df_filtered['crecimiento_ventas'].min()*100:.2f}%)
-        Crecimiento del último mes: {df_filtered['crecimiento_ventas'].iloc[-1]*100:.2f}% si hay datos suficientes
-        Variabilidad del crecimiento: {df_filtered['crecimiento_ventas'].std()*100:.2f}%
-        Promedio de ventas mensuales: ${df_filtered['ventas_mes'].mean():,.0f}
-        Promedio de cantidad de ventas mensuales: {df_filtered['cantidad_ventas_mes'].mean():,.0f}
-        """
-
+        meta_crecimiento = 0.02
+        contexto = generar_contexto_ml_crecimiento(df_filtered, meta_crecimiento)
         ai_response = generar_respuesta_chat(contexto, last_user_msg)
 
     for i in range(len(history) - 1, -1, -1):

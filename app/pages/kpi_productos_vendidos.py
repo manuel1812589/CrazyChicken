@@ -10,6 +10,7 @@ from app.services.ai_service import (
     generar_analisis_productos_vendidos,
     generar_respuesta_chat,
 )
+from app.services.ml_service import generar_contexto_ml_productos
 import time
 
 dash.register_page(__name__, path="/kpi-productos-vendidos")
@@ -773,32 +774,8 @@ def generate_ai_response(is_thinking, history, mes_filtro, tipo_filtro):
     if df.empty:
         ai_response = "No hay datos disponibles para responder tu pregunta."
     else:
-        contexto = f"""
-        DATOS DE PRODUCTOS VENDIDOS POR TIPO:
-        
-        Total productos vendidos: {df['cantidad_vendida'].sum():,.0f}
-        Tipos de plato analizados: {df['tipo_plato'].nunique()}
-        Ventas totales (transacciones): {df['cantidad_ventas'].sum():,.0f}
-        Ingresos totales: ${df['ventas_totales'].sum():,.0f}
-        Meta de productos: 1,600 por periodo
-        
-        Distribución por tipo de plato:
-        """
-
-        for tipo in df["tipo_plato"].unique():
-            tipo_df = df[df["tipo_plato"] == tipo]
-            tipo_total = tipo_df["cantidad_vendida"].sum()
-            contexto += f"\n- {tipo}: {tipo_total:,.0f} productos ({tipo_total/df['cantidad_vendida'].sum()*100:.1f}%)"
-
-        contexto += f"""
-        
-        KPIs adicionales:
-        - Meses que superan la meta: {(df.groupby('mes')['cantidad_vendida'].sum() >= 1600).sum()}
-        - Promedio de productos por venta: {df['cantidad_vendida'].sum()/df['cantidad_ventas'].sum():.1f}
-        - Tipo más vendido: {df.loc[df['cantidad_vendida'].idxmax(), 'tipo_plato']}
-        - Ventas promedio por tipo: ${df['ventas_totales'].sum()/df['tipo_plato'].nunique():,.0f}
-        """
-
+        meta_productos = 1600
+        contexto = generar_contexto_ml_productos(df, meta_productos)
         ai_response = generar_respuesta_chat(contexto, last_user_msg)
 
     for i in range(len(history) - 1, -1, -1):

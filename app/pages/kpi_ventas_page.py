@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from app.services.data_service import get_ventas_mensuales_2024
 from app.components.graph_card import create_graph_card
 from app.services.ai_service import generar_analisis_ia, generar_respuesta_chat
+from app.services.ml_service import generar_recomendaciones_ml
 import time
 
 dash.register_page(__name__, path="/kpi-ventas")
@@ -542,13 +543,9 @@ def generate_ai_response(is_thinking, history, mes_filtro):
     if df.empty:
         ai_response = "No hay datos disponibles para responder tu pregunta."
     else:
-        contexto = f"""
-        Ventas promedio: ${df["ventas_mes"].mean():,.0f}
-        Mejor mes: {df.loc[df["ventas_mes"].idxmax()]["nombre_mes"]}
-        Peor mes: {df.loc[df["ventas_mes"].idxmin()]["nombre_mes"]}
-        Ventas totales: ${df["ventas_mes"].sum():,.0f}
-        Número de meses analizados: {len(df)}
-        """
+        meta_mensual = df["ventas_mes"].mean() * 1.10
+        resultado_ml = generar_recomendaciones_ml(df, meta_mensual)
+        contexto = resultado_ml["contexto_ia"]
 
         ai_response = generar_respuesta_chat(contexto, last_user_msg)
 

@@ -9,6 +9,7 @@ from app.services.ai_service import (
     generar_analisis_cantidad_ventas,
     generar_respuesta_chat,
 )
+from app.services.ml_service import generar_contexto_ml_cantidad
 import time
 
 dash.register_page(__name__, path="/kpi-cantidad-ventas")
@@ -539,21 +540,8 @@ def generate_ai_response(is_thinking, history, mes_filtro):
     if df.empty:
         ai_response = "No hay datos disponibles para responder tu pregunta."
     else:
-        contexto = f"""
-        DATOS DE CANTIDAD DE VENTAS:
-        
-        Ventas totales del periodo: {df["cantidad_ventas"].sum():,.0f} transacciones
-        Promedio mensual: {df["cantidad_ventas"].mean():,.0f} ventas/mes
-        Mejor mes (mayor volumen): {df.loc[df["cantidad_ventas"].idxmax()]["nombre_mes"]} ({df["cantidad_ventas"].max():,.0f} ventas)
-        Peor mes (menor volumen): {df.loc[df["cantidad_ventas"].idxmin()]["nombre_mes"]} ({df["cantidad_ventas"].min():,.0f} ventas)
-        Meta mensual establecida: 2,400 ventas
-        Meses que superan la meta: {(df["cantidad_ventas"] >= 2400).sum()}
-        Meses por debajo de la meta: {(df["cantidad_ventas"] < 2400).sum()}
-        Crecimiento acumulado: {df["cantidad_acumulada"].iloc[-1]:,.0f} ventas
-        Meta acumulada: {df["meta_acumulada"].iloc[-1]:,.0f} ventas
-        Desviación estándar: {df["cantidad_ventas"].std():,.0f}
-        """
-
+        meta_cantidad = 2400
+        contexto = generar_contexto_ml_cantidad(df, meta_cantidad)
         ai_response = generar_respuesta_chat(contexto, last_user_msg)
 
     for i in range(len(history) - 1, -1, -1):

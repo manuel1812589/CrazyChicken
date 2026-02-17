@@ -10,6 +10,8 @@ from app.services.ai_service import (
     generar_analisis_participacion_productos,
     generar_respuesta_chat,
 )
+from app.services.ml_service import generar_contexto_ml_participacion
+
 import time
 
 dash.register_page(__name__, path="/kpi-participacion-productos")
@@ -756,41 +758,8 @@ def generate_ai_response(is_thinking, history, mes_filtro):
     if df.empty:
         ai_response = "No hay datos disponibles para responder tu pregunta."
     else:
-        contexto = f"""
-        DATOS DE PARTICIPACIÓN DE PRODUCTOS:
-        
-        Total productos analizados: {df.shape[0]}
-        Productos sobre meta (10%): {df[df['cumple_meta']].shape[0]} de {df.shape[0]}
-        Ventas totales: ${df['ventas_totales'].sum():,.0f}
-        
-        Productos líderes (top 5 por participación):
-        """
-
-        df_top5 = df.nlargest(5, "participacion_porcentual")
-        for idx, row in df_top5.iterrows():
-            contexto += f"\n- {row['producto']}: {row['participacion_formateada']} (${row['ventas_totales']:,.0f})"
-
-        contexto += f"""
-        
-        Concentración de mercado:
-        - Top 3 productos: {df.nlargest(3, 'participacion_porcentual')['participacion_porcentual'].sum():.1f}%
-        - Top 5 productos: {df_top5['participacion_porcentual'].sum():.1f}%
-        - Top 10 productos: {df.nlargest(10, 'participacion_porcentual')['participacion_porcentual'].sum():.1f}%
-        
-        Producto líder: {df.loc[df['participacion_porcentual'].idxmax(), 'producto']} ({df['participacion_porcentual'].max():.2f}%)
-        Participación promedio: {df['participacion_porcentual'].mean():.2f}%
-        Desviación estándar: {df['participacion_porcentual'].std():.2f}%
-        
-        Distribución por categorías:
-        """
-
-        df_categoria = df.groupby("categoria", as_index=False).agg(
-            {"participacion_porcentual": "sum", "producto": "count"}
-        )
-
-        for _, row in df_categoria.iterrows():
-            contexto += f"\n- {row['categoria']}: {row['participacion_porcentual']:.1f}% ({row['producto']} productos)"
-
+        meta_participacion = 0.10
+        contexto = generar_contexto_ml_participacion(df, meta_participacion)
         ai_response = generar_respuesta_chat(contexto, last_user_msg)
 
     for i in range(len(history) - 1, -1, -1):

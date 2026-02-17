@@ -10,6 +10,7 @@ from app.services.ai_service import (
     generar_analisis_ventas_promedio_vendedor,
     generar_respuesta_chat,
 )
+from app.services.ml_service import generar_contexto_ml_vendedores
 import time
 
 dash.register_page(__name__, path="/kpi-ventas-promedio-vendedor")
@@ -762,40 +763,8 @@ def generate_ai_response(is_thinking, history, mes_filtro):
     if df.empty:
         ai_response = "No hay datos disponibles para responder tu pregunta."
     else:
-        contexto = f"""
-        DATOS DE VENTAS PROMEDIO POR VENDEDOR:
-        
-        Ventas totales: ${df['ventas_totales'].sum():,.0f}
-        Vendedores únicos: {df['vendedor'].nunique()}
-        Ventas promedio por vendedor: ${df['ventas_totales'].sum()/df['vendedor'].nunique():,.0f}
-        Meta por vendedor: $20,000
-        
-        Vendedores sobre meta: {df[df['cumple_meta']].shape[0]} de {df.shape[0]} ({df[df['cumple_meta']].shape[0]/df.shape[0]*100:.1f}%)
-        Promedio mensual por vendedor: ${df['ventas_promedio_por_vendedor'].mean():,.0f}
-        
-        Mejor vendedor: {df.loc[df['ventas_totales'].idxmax(), 'vendedor']} (${df['ventas_totales'].max():,.0f})
-        Promedio de ventas por transacción: ${df['promedio_por_venta'].mean():,.0f}
-        Clientes atendidos por vendedor: {df['clientes_atendidos'].sum()/df['vendedor'].nunique():.0f}
-        Productos vendidos por vendedor: {df['productos_vendidos'].sum()/df['vendedor'].nunique():.0f}
-        
-        Desempeño por mes:
-        """
-
-        df_mensual = (
-            df.groupby(["nombre_mes", "mes"], as_index=False)
-            .agg(
-                {
-                    "ventas_promedio_por_vendedor": "first",
-                    "cumple_meta_promedio": "first",
-                }
-            )
-            .sort_values("mes")
-        )
-
-        for _, row in df_mensual.iterrows():
-            estado = "✅" if row["cumple_meta_promedio"] else "❌"
-            contexto += f"\n- {row['nombre_mes']}: ${row['ventas_promedio_por_vendedor']:,.0f} {estado}"
-
+        meta_vendedor = 20000
+        contexto = generar_contexto_ml_vendedores(df, meta_vendedor)
         ai_response = generar_respuesta_chat(contexto, last_user_msg)
 
     for i in range(len(history) - 1, -1, -1):
