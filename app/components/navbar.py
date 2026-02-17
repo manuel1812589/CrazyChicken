@@ -20,7 +20,9 @@ def navbar(title="Dashboard Pollería"):
                         dbc.DropdownMenuItem("Perfil"),
                         dbc.DropdownMenuItem("Configuración"),
                         dbc.DropdownMenuItem(divider=True),
-                        dbc.DropdownMenuItem("Cerrar Sesión", href="/logout"),
+                        dbc.DropdownMenuItem(
+                            "Cerrar Sesión", href="/logout", external_link=True
+                        ),
                     ],
                     nav=True,
                     in_navbar=True,

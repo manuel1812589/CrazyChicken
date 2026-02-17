@@ -3,11 +3,14 @@ from dash.exceptions import PreventUpdate
 from functools import wraps
 from dash import ctx
 import dash_bootstrap_components as dbc
+from flask_login import current_user
 from app.auth.session import login_manager
 from app.layouts.main_layout import main_layout
 from app.components.module_data import get_module_by_href
 from config.settings import DEBUG
 import os
+from flask_login import logout_user
+from flask import redirect
 
 BASE_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSETS_PATH = os.path.join(BASE_PATH, "assets")
@@ -28,6 +31,8 @@ app = Dash(
     assets_folder=ASSETS_PATH,
 )
 app.css.config.serve_locally = True
+
+PUBLIC_ROUTES = ["/login"]
 
 
 def safe_callback_for(module_href):
@@ -61,16 +66,25 @@ def test_css():
     Input("url", "pathname"),
 )
 def route_layout(pathname):
+    """
+    Controla qué se muestra según la ruta y el estado de autenticación.
+    - /login → muestra la página de login, oculta el layout principal
+    - Otras rutas → si no está autenticado, redirige a /login
+    """
     if pathname == "/login":
+        return {"display": "none"}, page_container
+
+    if not current_user.is_authenticated:
         return (
             {"display": "none"},
-            page_container,
+            html.Div(
+                [
+                    dcc.Location(id="redirect-login", pathname="/login", refresh=True),
+                ]
+            ),
         )
 
-    return (
-        {"display": "block"},
-        None,
-    )
+    return {"display": "block"}, None
 
 
 @app.callback(
@@ -85,7 +99,9 @@ def set_active_module(pathname):
 
 
 @app.callback(
-    Output("url", "pathname"), Input("url", "pathname"), prevent_initial_call=True
+    Output("url", "pathname"),
+    Input("url", "pathname"),
+    prevent_initial_call=True,
 )
 def _dummy(_):
     raise PreventUpdate
@@ -93,6 +109,13 @@ def _dummy(_):
 
 server = app.server
 login_manager.init_app(server)
+
+
+@server.route("/logout")
+def logout():
+    logout_user()
+    return redirect("/login")
+
 
 server.config.update(
     SESSION_COOKIE_SECURE=not DEBUG,
