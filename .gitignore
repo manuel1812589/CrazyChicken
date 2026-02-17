@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+app/models/*.pkl
+*.db
+*.pyo
+.venv/
+venv/
+env/
+.idea/
+.vscode/

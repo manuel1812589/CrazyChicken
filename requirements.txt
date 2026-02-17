@@ -1,0 +1,14 @@
+dash==3.3.0
+dash_bootstrap_components==2.0.4
+Flask_Login==0.6.3
+joblib==1.5.3
+numpy==2.4.2
+pandas==3.0.0
+plotly==6.5.1
+python-dotenv==1.2.1
+python_docx==1.2.0
+Requests==2.32.5
+scikit_learn==1.8.0
+SQLAlchemy==2.0.46
+pyodbc==5.2.0
+gunicorn==23.0.0
